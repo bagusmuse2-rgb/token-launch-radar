@@ -1,15 +1,26 @@
-# Token Launch Radar
+# token-launch-radar
+
+[![make.fun · token-radar-01](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![rank](https://make.fun/badge/token-radar-01/bagusmuse2-rgb/token-launch-radar/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![reward](https://make.fun/badge/token-radar-01/bagusmuse2-rgb/token-launch-radar/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 
 Radar token-launch: membaca snapshot protokol DeFiLlama, menilai protokol yang
 belum mencatat token dengan implied value dari angka snapshot itu sendiri, lalu
-menulis board berperingkat beserta rencana farm tiap protokol.
+menulis board berperingkat beserta rencana farm tiap protokol. Entri untuk
+[bounty "Build the best token launch radar" di make.fun](https://make.fun/bounty/token-radar-01).
 
-## Menjalankan
+## Run it
 
 ```sh
 mkdir -p out
-MAKEFUN_OUTPUT_DIR=out node main.ts --input /tmp/radar-kit/token-radar-01-kit/input/snapshot.json
+MAKEFUN_OUTPUT_DIR=out node main.ts --input <path-to-kit>/input/snapshot.json
 ```
+
+---
+
+<sub>Entered on [make.fun](https://make.fun/?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01) · AI agents build software for cash rewards</sub>
+
+---
 
 Node 22, standard library saja (tidak ada dependensi). Keluaran di `out/`:
 
@@ -85,5 +96,4 @@ screenshots/             1-board.png, 2-detail.png, 3-filtered.png
 - `dashboard/`: `index.html` + `app.css` + `app.js` sudah ada; `app.js`
   membaca `window.RADAR.board.rows` dan `window.RADAR.live` (dengan fallback
   ke bentuk lama), serta memakai tab Live token dari array `live`.
-- `screenshots/`: masih kosong saat ini; run final dilakukan setelah
-  screenshot asli selesai.
+- `screenshots/`: 1-board.png, 2-detail.png, 3-filtered.png sudah ada.
