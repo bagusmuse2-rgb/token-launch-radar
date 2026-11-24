@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token Radar — pre-token protocols by implied value</title>
+<meta name="description" content="A radar for protocols that record no token yet, ranked by the implied value of the token they might one day issue, with a farm plan for each.">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="topbar">
+    <div class="brand">
+      <span class="radar-mark" aria-hidden="true"><span class="sweep"></span><span class="blip b1"></span><span class="blip b2"></span></span>
+      <div>
+        <p class="brand-name">TOKEN RADAR</p>
+        <p class="brand-sub">Pre-token protocols, ranked by implied value</p>
+      </div>
+    </div>
+    <dl class="meta" id="meta">
+      <div><dt>Snapshot</dt><dd id="meta-asof">—</dd></div>
+      <div><dt>Watchlist floor</dt><dd id="meta-floor">—</dd></div>
+      <div><dt>Rows</dt><dd id="meta-rows">—</dd></div>
+    </dl>
+  </header>
+
+  <section class="stats" aria-label="Board summary">
+    <article class="stat"><span class="stat-label">Watchlist covered</span><strong class="stat-num" id="stat-watch">—</strong><span class="stat-note">every watchlist protocol is on the board</span></article>
+    <article class="stat"><span class="stat-label">Pre-token rows ranked</span><strong class="stat-num" id="stat-board">—</strong><span class="stat-note">ranked by implied value, strongest first</span></article>
+    <article class="stat"><span class="stat-label">Top implied value</span><strong class="stat-num" id="stat-top">—</strong><span class="stat-note" id="stat-top-name">—</span></article>
+    <article class="stat"><span class="stat-label">Live-token protocols</span><strong class="stat-num" id="stat-live">—</strong><span class="stat-note">already trading — set aside, not ranked</span></article>
+  </section>
+
+  <section class="model" aria-labelledby="model-title">
+    <div class="model-head">
+      <h2 id="model-title">How the implied value is built</h2>
+      <p>One function scores every protocol, from the snapshot's own figures only. No name is special-cased, and nothing here predicts whether — or when — a token launches.</p>
+    </div>
+    <ol class="model-steps">
+      <li><b>Base</b><span>TVL × <code id="m-base">base multiple</code></span><em>Size today, at the base multiple.</em></li>
+      <li><b>Growth</b><span>7-day change, clamped to <code id="m-clamp">a floor and a cap</code>, weighted × <code id="m-weight">growth weight</code></span><em>Momentum lifts or drags the base.</em></li>
+      <li><b>Maturity</b><span><code id="m-floor">maturity floor</code> + age up to <code id="m-days">maturity cap</code> days × <code id="m-range">maturity range</code></span><em>Longer running with no token counts for more.</em></li>
+    </ol>
+    <p class="formula" id="formula">implied&nbsp;=&nbsp;round(&nbsp;tvl_usd&nbsp;×&nbsp;base&nbsp;×&nbsp;(1&nbsp;+&nbsp;clamped&nbsp;7d&nbsp;change&nbsp;×&nbsp;weight)&nbsp;×&nbsp;maturity&nbsp;)</p>
+    <p class="disclaimer">Implied value is the model's claim, not a price and not a promise. A protocol that records no token may still have one its record does not carry.</p>
+  </section>
+
+  <div class="toolbar" role="search">
+    <label class="field grow">
+      <span>Search</span>
+      <input type="search" id="q" placeholder="Name, category, chain or symbol…" autocomplete="off">
+    </label>
+    <label class="field">
+      <span>Category</span>
+      <select id="category" aria-label="Filter by category"></select>
+    </label>
+    <div class="field">
+      <span>Token status</span>
+      <div class="tabs" role="tablist" aria-label="Token status filter">
+        <button type="button" role="tab" id="tab-all" data-tab="all" aria-selected="false">All</button>
+        <button type="button" role="tab" id="tab-pre" data-tab="pre-token" aria-selected="true">Pre-token</button>
+        <button type="button" role="tab" id="tab-live" data-tab="live-token" aria-selected="false">Live token</button>
+      </div>
+    </div>
+    <p class="count" id="count" aria-live="polite"></p>
+  </div>
+
+  <main class="panel" id="board-panel">
+    <div class="table-scroll">
+      <table id="board">
+        <caption class="sr-only">Ranked board of protocols. Activate a column heading to sort; activate a row to open its detail view.</caption>
+        <thead><tr id="head-row"></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="empty" hidden>
+      <h2>No protocol matches that filter</h2>
+      <p>Clear the search or pick another category to see the board again.</p>
+      <button type="button" class="btn" id="clear-filters">Clear filters</button>
+    </div>
+  </main>
+
+  <p class="footnote">Source: the sealed DefiLlama protocol snapshot. “No token” means the protocol's record carries no token — not proof that none exists. Farm plans are generic steps derived from category, chains, TVL and age; check the protocol's own pages before moving funds.</p>
+</div>
+
+<dialog class="detail" id="detail" aria-labelledby="detail-title">
+  <div id="detail-body"></div>
+</dialog>
+
+<noscript><p class="noscript">This radar needs JavaScript and its data file to render the board.</p></noscript>
+<script src="../data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
