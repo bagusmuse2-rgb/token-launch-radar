@@ -228,3 +228,115 @@ Verifikasi semua gate — SEMUA LOLOS:
   dan live-token dipisah ke array `live`.
 - (Tidak ada lagi: kedua bug tampilan di atas sudah diperbaiki dan
   terverifikasi pada run ini.)
+
+## Revisi radar-4 (2026-11-24, malam) — kalibrasi ulang, seleksi early by implied, farm plan per kategori/chain, filter dashboard
+
+Perubahan di `lib/model.ts` (`MODEL_VERSION = radar-4`):
+- Kalibrasi base dari rasio mcap/TVL 144 live-token (winsorize 0,005–2,0;
+  median per kategori n>=5, shrink ke median global 0,169 bobot n/(n+5),
+  clamp 0,05–0,40; default 0,169): Basis Trading 0,362, Canonical Bridge
+  0,400 (kena cap), Dexs 0,288, RWA 0,237, Lending 0,142, Yield 0,134,
+  Bridge 0,119, Yield Aggregator 0,110 (median mentah 0,050; shrink
+  menariknya ke atas), CEX 0,095, Liquid Staking 0,076. Kategori n<5
+  tetap default. Median kategori + n disimpan di `live_category_medians`
+  untuk benchmark dashboard.
+- Diskon ukuran bertingkat baru (tier pertama yang cocok menang): 1,00 di
+  bawah $100 jt; 0,80 $100–500 jt; 0,65 $500 jt–$1 M; 0,50 $1–5 M; 0,35 di
+  atas $5 M. Dari median rasio per bucket TVL (<$50 jt 0,307; $50–100 jt
+  0,149; $100–500 jt 0,082; $500 jt–$1 M 0,034; $1–5 M 0,030; >$5 M 0,044),
+  dibuat lebih dangkal dari rasio mentah karena base kategori sudah menyerap
+  sebagian efek ukuran; tier lebih curam (0,70/0,55/0,40/0,30) justru
+  menurunkan hit 0,5–2x dari 40 ke 38, jadi tier konservatif dipakai.
+- Growth 0,25→0,5, clip -30/+30→-60/+60; maturity 0,9+0,2→0,7+0,5.
+  Didokumentasikan di model.ts + dashboard sebagai prior kriteria, bukan
+  klaim prediktif: korelasi log(mcap/TVL) vs change_7d = 0,004 dan vs umur =
+  0,063 pada 128 live-token bermcap > $0.
+- Seleksi early by implied: semua kandidat early yang eligible dinilai
+  dulu, 160 teratas by implied (seri slug menaik). Dari 6 protokol yang
+  bocor di radar-3 (seleksi by TVL), hanya Neutral Trade yang masuk di
+  radar-4 (early rank 159, board rank 199); Gain (171), UltraYield Vaults
+  (202), Agua (205), NEMO Trading (210), Perena Vaults (212) jatuh di bawah
+  cut 160 — bukan kebocoran lagi, melainkan cut yang bekerja di bawah model
+  baru (dasar board naik karena default 0,10→0,169; bottom board $2,07 jt→
+  $3,58 jt).
+- Farm plan: cabang actionFor baru untuk Basis Trading (delta-neutral +
+  hedge, sebut stablecoin), Anchor BTC/Restaked BTC/Decentralized BTC,
+  Chain, Payments/Card, Options, Liquidity Manager, CeDeFi, plus
+  Stablecoin Issuer/Wrapper, Dual-Token, Algo-Stables, CDP Manager,
+  Indexes, Governance, OTC, Collateral Markets, Farm — langkah 2 generik
+  "Deposit $X of USDC into ..." turun dari 34/200 menjadi 0/200 (2 yang
+  tersisa dihitung detektor lama ternyata cabang CeDeFi yang spesifik).
+  Gas per chain pertama (Ethereum $5–$15, Bitcoin $1–$5, Solana
+  $0,01–$0,10, lainnya $0,10–$1); langkah 3 (mingguan) dan 5 (klaim)
+  dibedakan per kategori (weeklyFor/claimFor); chain kedua disebut di
+  langkah 4 (97/97 baris multi-chain); tier modal tambah $75 (TVL
+  $25–100 jt). Langkah 141–340 karakter.
+- `RadarData` tambah `watchlist: string[]` (40 slug) untuk toggle dashboard.
+
+Validasi live-token (dihitung dari implementasi TS `impliedValue`, n=128
+live bermcap > $0; 15 bermcap 0 + 1 bermcap -1 dikeluarkan karena rasio
+terhadap mcap<=0 tidak bermakna):
+- radar-3: median implied/mcap 0,453; 29/128 dalam 0,5–2x; 64/128 dalam 0,25–4x
+- radar-4: median implied/mcap 0,804; 40/128 dalam 0,5–2x; 66/128 dalam 0,25–4x
+- Replikasi Python independen cocok persis; hitung ulang model Python atas
+  board cocok 200/200 baris.
+
+Perubahan dashboard (`index.html`, `app.js`, `app.css`; total 46.689 byte,
+sisa 18.847 byte ke cap teks dossier 65.536):
+- Filter `<select>` chain + toggle "Watchlist only" (dari `watchlist` di
+  data.js; terverifikasi: 40 of 200 shown).
+- Bug stat-watch diperbaiki: dihitung dari slug board yang ada di watchlist
+  ("40 / 40", bukan tautologi); meta "Rows" kini 200 (PRE.length), bukan 224.
+- Tab All: kolom value berlabel "Implied / mcap" dan tombol sort-nya
+  dinonaktifkan (implied vs market cap tidak sebanding; sort value dialihkan
+  ke TVL saat pindah ke tab All); rank live tampil "L1"–"L24", bukan "—".
+- Modal detail: rasio implied/TVL (pre) atau mcap/TVL (live) baris ini vs
+  median mcap/TVL live kategori yang sama (`live_category_medians`, fallback
+  median global 0,169, n=144) — terverifikasi di modal Ethena (0,21x vs
+  median Basis Trading 0,48x, n=8) dan di satu baris live.
+- `renderModel()` memakai `size_tiers` (fallback ke field radar-3 untuk
+  data.js lama); paragraf kalibrasi baru menjelaskan metode + validasi +
+  korelasi ~nol growth/maturity. Rumus kini:
+  `implied = round( tvl_usd × 0.169 × size discount (1 below $100M, 0.35
+  over $5B, 0.5 over $1B, 0.65 over $500M, 0.8 over $100M) × (1 +
+  clamp(change_7d, -60, +60) / 100 × 0.5) × (0.7 + min(age_days, 1095) /
+  1095 × 0.5) ) — base by category: ...`.
+
+Screenshot (Chrome 158 diinstal ulang via .deb dl.google.com — VM baru
+tanpa browser; Playwright via playwright-core + executablePath
+/usr/bin/google-chrome-stable, viewport 1440x900, dari file://…/out/):
+- `screenshots/1-board.png`: 1440x900, 204.300 byte (199 KiB) — board
+  Pre-token, "200 of 200 shown", rank 1 Ethena USDe $1,03B, stat 40/40,
+  Rows 200, filter Chain + Watchlist only terlihat.
+- `screenshots/2-detail.png`: 1440x900, 257.666 byte (251 KiB) — modal
+  `#/protocol/ethena-usde`, di-scroll ke farm plan: benchmark kategori
+  (0,21x vs 0,48x), "Recomputed $1.03B — matches the board", farm plan
+  delta-neutral + gas Ethereum $5–$15.
+- `screenshots/3-filtered.png`: 1440x900, 195.973 byte (191 KiB) — filter
+  Chain "Solana", "35 of 200 shown".
+- Mobile dicek di viewport 390x844 (tidak dikirim): tanpa overflow
+  horizontal (0 px), statistik 2 kolom, model steps menumpuk rapi.
+
+Run final (snapshot kit, `out/` dihapus dulu, 2 run):
+- Run 1 ke `out/`, run 2 ke `/tmp/radar4-final-b`: keduanya exit 0.
+- sha256 identik antar-run: board.json
+  `3995eca548c0cae21078180736aa8e87787cd8a3190d645323458d9d7bf07c0e`,
+  data.js `0ab78d1d65a30f62e213a7e8dd430f9f9cac65c07ef9be7221e473c4f43b79a0`,
+  dossier.json `cca9daa5f21678baf426bd9747c6a3f8e7492b33974bd45a664f2dd94c5ff3b1`.
+- 5 teratas baru: 1 Ethena USDe $1.025.501.900 (Basis Trading) · 2 Morpho
+  Blue $595.879.313 (Lending) · 3 SparkLend $351.008.238 · 4 Sky Lending
+  $301.483.393 · 5 Spark Liquidity Layer $234.985.986. 5 terbawah: 196–200
+  di $3,58–3,60 jt (BounceBit Prime, Neutral Trade, Y10K Capital).
+
+Verifikasi semua gate — SEMUA LOLOS:
+- dashboard_files: 3 file, 46.689 byte (<=4 MiB), tanpa http:// atau https://.
+- board_file: 200 baris, 0 slug tak dikenal, 0 nama kosong, implied bulat positif.
+- sorted_by_value: rank 1..200, implied menurun, 200 nilai unik, top $1.025.501.900, bottom $3.575.712.
+- coverage: 40/40 watchlist.
+- farm_steps: 0 baris buruk, 6 langkah/baris, panjang 141–340 karakter.
+- screenshots: 3 gambar PNG 1440x900, 191–251 KiB (<=512 KiB).
+- dossier_matches: hitung ulang buildDossier atas out/ byte-identik (`cmp` lolos).
+- dossier.json 925.930 byte (<=1,5 MiB); dashboard <64 KB (46.689 byte).
+- Perilaku dashboard diuji via Playwright (tanpa error halaman): sort value
+  nonaktif di tab All, rank live L-prefix, watchlist-only 40/200, benchmark
+  di modal live, search, clear-filters mereset chain + watchlist-only.

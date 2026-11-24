@@ -8,20 +8,47 @@
 //   live-token = gecko_id non-null (tokennya sudah diperdagangkan)
 //
 // Board berisi 200 baris pre-token saja: seluruh watchlist (40), dan 160
-// pre-token di luar watchlist dengan TVL tertinggi. Live-token tidak masuk
+// pre-token di luar watchlist dengan implied value tertinggi. Live-token tidak masuk
 // board: 24 live-token dengan market cap terbesar dibawa terpisah di array
 // `live` (bentuk baris sama seperti board, implied dihitung rumus yang sama)
 // agar dashboard bisa menampilkannya di tab Live tanpa mencampuri ranking
 // pre-token.
 //
-// Implied value, untuk setiap baris:
+// Implied value, untuk setiap baris (radar-4):
 //
-//   base      = TVL x BASE_MULTIPLE[kategori]
-//   sizeDisc  = 0.70 bila TVL > $1 miliar; 0.85 bila $500 jt s.d. $1 miliar; 1.00 bila di bawahnya
-//   growth    = 1 + clip(change_7d, -30, +30) / 100 x 0.25   (null -> 0)
-//   maturity  = 0.9 + min(umur_hari, 1095) / 1095 x 0.2
+//   base      = TVL x BASE_MULTIPLE[kategori]   (dikalibrasi dari live-token, lihat MODEL)
+//   sizeDisc  = 1.00 di bawah $100 jt; 0.80 $100-500 jt; 0.65 $500 jt-$1 M;
+//               0.50 $1-5 M; 0.35 di atas $5 M
+//   growth    = 1 + clip(change_7d, -60, +60) / 100 x 0.5   (null -> 0)
+//   maturity  = 0.7 + min(umur_hari, 1095) / 1095 x 0.5
 //               (listed_at null, atau tanggal default 2025-05-20 yang meragukan -> 1.0 netral)
 //   implied   = max(1, round(TVL x base x sizeDisc x growth x maturity)), dibatasi 1.0 x TVL
+//
+// Kalibrasi base (snapshot 2026-11-14, 758 protokol): rasio mcap/TVL dari 144
+// live-token di-winsorize (jepit ke 0,005-2,0; 15 protokol bermcap 0 dan 1
+// bermcap -1 ikut terjepit ke 0,005), median per kategori hanya untuk n>=5,
+// di-shrink ke median global 0,169 dengan bobot n/(n+5), lalu dibatasi ke
+// 0,05-0,40. Kategori n<5 atau tanpa pembanding live memakai default 0,169
+// (median global). Diskon ukuran bertingkat dari median rasio per bucket TVL
+// (<$50 jt 0,307; $50-100 jt 0,149; $100-500 jt 0,082; $500 jt-$1 M 0,034;
+// $1-5 M 0,030; >$5 M 0,044 — rasio jatuh ~5x dari kecil ke besar), tapi
+// dibuat lebih dangkal dari rasio bucket mentah karena base per kategori
+// sudah menyerap sebagian efek ukuran; tier yang lebih curam justru
+// menurunkan validasi (lihat VALIDASI di bawah).
+//
+// Growth dan maturity BUKAN klaim prediktif: pada 128 live-token bermcap > $0,
+// korelasi log(mcap/TVL) dengan change_7d adalah 0,004 dan dengan umur 0,063
+// — praktis nol. Keduanya adalah prior penilaian yang diminta kriteria
+// (model harus memakai momentum 7 hari dan lama tanpa token), jadi bobotnya
+// dijaga kecil di samping base dan diskon ukuran.
+//
+// VALIDASI pada 128 live-token bermcap > $0 (implied dihitung rumus yang sama,
+// dibandingkan dengan mcap sebenarnya):
+//   radar-3: median implied/mcap 0,453; 29/128 dalam 0,5-2x; 64/128 dalam 0,25-4x
+//   radar-4: median implied/mcap 0,804; 40/128 dalam 0,5-2x; 66/128 dalam 0,25-4x
+// Model starter (base datar 0,25, tanpa diskon ukuran) sebagai pembanding:
+// median 1,199; 37/128 dalam 0,5-2x. Radar-4 masih konservatif (median < 1),
+// tapi jauh lebih dekat daripada radar-3.
 //
 // Urutan: implied menurun, seri diputus slug menaik. Rank 1..N.
 
@@ -48,48 +75,96 @@ export interface Snapshot {
   watchlist: string[];
 }
 
+/** Satu tingkat diskon ukuran: TVL >= min_tvl memakai discount. */
+export interface SizeTier {
+  min_tvl: number;
+  discount: number;
+}
+
+/** Median rasio mcap/TVL live-token untuk satu kategori (kalibrasi). */
+export interface CategoryBenchmark {
+  n: number;
+  median: number;
+}
+
 /** Konstanta model yang bisa dibaca dashboard. */
 export interface ModelConstants {
   base_multiples: Record<string, number>;
   base_default: number;
-  size_discount_over_1b: number;
-  size_discount_500m_1b: number;
-  size_threshold_1b: number;
-  size_threshold_500m: number;
+  size_tiers: SizeTier[];
   growth_weight: number;
+  growth_floor: number;
+  growth_cap: number;
   maturity_floor: number;
   maturity_range: number;
   maturity_days: number;
   neutral_maturity: number;
   doubtful_listed_at: string;
+  global_live_median: number;
+  global_live_n: number;
+  live_category_medians: Record<string, CategoryBenchmark>;
 }
 
 export const MODEL: ModelConstants = {
+  // Base per kategori (n>=5 saja), hasil shrink median winsorized ke median
+  // global 0,169 — bobot n/(n+5) — lalu clamp 0,05-0,40:
+  //   Lending 0,142 (n=15, median 0,132) · Yield 0,134 (n=13, median 0,121)
+  //   Liquid Staking 0,076 (n=11, median 0,034) · Dexs 0,288 (n=11, median 0,342)
+  //   CEX 0,095 (n=11, median 0,062) · RWA 0,237 (n=9, median 0,275)
+  //   Canonical Bridge 0,400 (n=8, median 0,746 -> shrink 0,524, kena cap)
+  //   Basis Trading 0,362 (n=8, median 0,482) · Bridge 0,119 (n=8, median 0,088)
+  //   Yield Aggregator 0,110 (n=5, median 0,050; shrink menariknya ke atas
+  //   menuju median global — median mentahnya 0,050, bukan 0,110)
   base_multiples: {
-    'Risk Curators': 0.15,
-    'Onchain Capital Allocator': 0.15,
-    RWA: 0.12,
-    Yield: 0.12,
-    Lending: 0.1,
+    'Basis Trading': 0.362,
+    'Canonical Bridge': 0.4,
+    Dexs: 0.288,
+    RWA: 0.237,
+    Lending: 0.142,
+    Yield: 0.134,
+    Bridge: 0.119,
+    'Yield Aggregator': 0.11,
+    CEX: 0.095,
+    'Liquid Staking': 0.076,
   },
-  base_default: 0.1,
-  size_discount_over_1b: 0.7,
-  size_discount_500m_1b: 0.85,
-  size_threshold_1b: 1_000_000_000,
-  size_threshold_500m: 500_000_000,
-  growth_weight: 0.25,
-  growth_floor: -30,
-  growth_cap: 30,
-  maturity_floor: 0.9,
-  maturity_range: 0.2,
+  base_default: 0.169,
+  // Diskon ukuran bertingkat, dari yang terkecil ke yang terbesar. Tier
+  // tertinggi dulu saat dicocokkan (sizeDiscountFor memakai yang pertama cocok).
+  size_tiers: [
+    { min_tvl: 5_000_000_000, discount: 0.35 },
+    { min_tvl: 1_000_000_000, discount: 0.5 },
+    { min_tvl: 500_000_000, discount: 0.65 },
+    { min_tvl: 100_000_000, discount: 0.8 },
+  ],
+  growth_weight: 0.5,
+  growth_floor: -60,
+  growth_cap: 60,
+  maturity_floor: 0.7,
+  maturity_range: 0.5,
   maturity_days: 1095,
   neutral_maturity: 1.0,
   doubtful_listed_at: '2025-05-20',
+  global_live_median: 0.169,
+  global_live_n: 144,
+  // Median rasio mcap/TVL live-token per kategori (n>=5), winsorized
+  // 0,005-2,0 — dipakai dashboard sebagai benchmark di modal detail.
+  live_category_medians: {
+    Lending: { n: 15, median: 0.132 },
+    Yield: { n: 13, median: 0.121 },
+    'Liquid Staking': { n: 11, median: 0.034 },
+    Dexs: { n: 11, median: 0.342 },
+    CEX: { n: 11, median: 0.062 },
+    RWA: { n: 9, median: 0.275 },
+    'Canonical Bridge': { n: 8, median: 0.746 },
+    'Basis Trading': { n: 8, median: 0.482 },
+    Bridge: { n: 8, median: 0.088 },
+    'Yield Aggregator': { n: 5, median: 0.05 },
+  },
 };
 
-export const MODEL_VERSION = 'radar-3';
+export const MODEL_VERSION = 'radar-4';
 
-/** Berapa pre-token di luar watchlist yang dibawa board, menurut TVL. */
+/** Berapa pre-token di luar watchlist yang dibawa board, menurut implied value. */
 export const EARLY_ROWS = 160;
 /** Berapa live-token yang dibawa array `live`, menurut market cap. */
 export const LIVE_ROWS = 24;
@@ -147,6 +222,7 @@ export interface RadarData {
   asOf: string;
   floorUsd: number;
   watchlistCount: number;
+  watchlist: string[];
   source: string;
   model: ModelConstants;
   modelVersion: string;
@@ -198,10 +274,11 @@ export function baseMultipleFor(category: string | null, model: ModelConstants):
   return model.base_default;
 }
 
-/** Diskon ukuran: protokol raksasa dinilai lebih murah per dolar TVL-nya. */
+/** Diskon ukuran bertingkat: tier pertama (TVL terbesar) yang cocok menang; di bawah tier terendah tidak ada diskon. */
 export function sizeDiscountFor(tvlUsd: number, model: ModelConstants): number {
-  if (tvlUsd > model.size_threshold_1b) return model.size_discount_over_1b;
-  if (tvlUsd >= model.size_threshold_500m) return model.size_discount_500m_1b;
+  for (const tier of model.size_tiers) {
+    if (tvlUsd >= tier.min_tvl) return tier.discount;
+  }
   return 1;
 }
 
@@ -260,11 +337,30 @@ function chainOf(p: SnapshotProtocol): string {
   return p.chains.length > 0 ? p.chains[0]! : 'its main chain';
 }
 
+/** Chain kedua protokol, bila multi-chain — disebut di rencana bila relevan. */
+function secondChainOf(p: SnapshotProtocol): string | null {
+  return p.chains.length > 1 ? p.chains[1]! : null;
+}
+
+/**
+ * Kisaran biaya gas satu transaksi di chain pertama. Bukan presisi palsu:
+ * Ethereum mainnet mahal (dolar), L2 dan BNB Chain murah (sen sampai $1),
+ * Solana paling murah (sen), Bitcoin di antaranya. Chain lain yang tidak
+ * bernama di sini memakai kisaran L2/alt-L1 yang umum ($0.10-$1).
+ */
+function gasRangeFor(chain: string): string {
+  if (chain === 'Ethereum') return '$5-$15';
+  if (chain === 'Solana') return '$0.01-$0.10';
+  if (chain === 'Bitcoin') return '$1-$5';
+  return '$0.10-$1';
+}
+
 /** Tier modal satu posisi farm, dari TVL protokol sendiri. */
 function capitalFor(p: SnapshotProtocol): number {
   if (p.tvl_usd >= 5_000_000_000) return 250;
   if (p.tvl_usd >= 1_000_000_000) return 150;
   if (p.tvl_usd >= 100_000_000) return 100;
+  if (p.tvl_usd >= 25_000_000) return 75;
   return 50;
 }
 
@@ -280,17 +376,29 @@ function holdDaysFor(age: number | null): number {
 function actionFor(p: SnapshotProtocol, capital: number, chain: string): string {
   const c = (p.category ?? '').toLowerCase();
   const name = p.name;
+  if (c.includes('basis trading')) {
+    return `Open a delta-neutral position on ${name} on ${chain}: deposit $${capital} of USDC as collateral, hold the yield-bearing position, and hedge the price exposure with a short of the same size, so funding-rate yield — not price moves — is what the position earns.`;
+  }
+  if (c.includes('anchor btc') || c.includes('restaked btc') || c.includes('decentralized btc')) {
+    return `Deposit $${capital} worth of BTC through ${name} on ${chain} and hold the BTC-backed receipt token it issues.`;
+  }
   if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) {
     return `Lend $${capital} of USDC on ${name} (${p.category ?? 'Lending'}) on ${chain} and leave the supply position open.`;
   }
   if (c.includes('dex') || c.includes('yield aggregator') || c.includes('leveraged farm')) {
     return `Add $${capital} of liquidity to the main ${name} pool on ${chain} and leave the position open.`;
   }
-  if (c.includes('yield')) {
+  if (c.includes('liquidity manager')) {
+    return `Deposit $${capital} into a managed ${name} vault on ${chain} and hold the vault shares while it rebalances the range for you.`;
+  }
+  if (c.includes('yield') || c.includes('farm')) {
     return `Deposit $${capital} into the highest-yield ${name} vault on ${chain} and hold the receipt tokens.`;
   }
   if (c.includes('bridge')) {
     return `Bridge $${capital} of USDC into ${chain} through ${name} and put the bridged funds to work in its app.`;
+  }
+  if (c.includes('chain') && !c.includes('cross')) {
+    return `Bridge $${capital} of USDC onto ${name} (${chain}) and use it in the chain's own flagship app, keeping the position open.`;
   }
   if (c.includes('restak') || c.includes('staking')) {
     return `Stake $${capital} of the chain asset through ${name} on ${chain} and hold the staking receipt.`;
@@ -298,11 +406,17 @@ function actionFor(p: SnapshotProtocol, capital: number, chain: string): string 
   if (c.includes('perpetual') || c.includes('derivative')) {
     return `Deposit $${capital} of USDC as margin on ${name} on ${chain} and open one small hedged position.`;
   }
+  if (c.includes('options')) {
+    return `Deposit $${capital} of USDC as collateral on ${name} on ${chain} and open one small hedged options position.`;
+  }
   if (c.includes('prediction')) {
     return `Fund $${capital} on ${name} (${p.category ?? 'Prediction Market'}) on ${chain} and take one market position.`;
   }
   if (c.includes('curator') || c.includes('allocator')) {
     return `Allocate $${capital} into a ${name} vault on ${chain} and hold the vault shares.`;
+  }
+  if (c.includes('stablecoin issuer') || c.includes('stablecoin wrapper') || c.includes('dual-token') || c.includes('algo-stable')) {
+    return `Mint $${capital} of the stable asset through ${name} on ${chain} and hold it.`;
   }
   if (c.includes('stable')) {
     return `Mint or deposit $${capital} of the stable asset through ${name} on ${chain} and hold it.`;
@@ -310,10 +424,90 @@ function actionFor(p: SnapshotProtocol, capital: number, chain: string): string 
   if (c.includes('rwa')) {
     return `Mint $${capital} of the yield-bearing asset from ${name} on ${chain} and hold it.`;
   }
+  if (c.includes('payments') || c.includes('card issuer')) {
+    return `Route $${capital} of USDC through ${name} on ${chain} as a real payment and keep the transaction receipt.`;
+  }
+  if (c.includes('indexes')) {
+    return `Buy $${capital} of the ${name} index token on ${chain} and hold it.`;
+  }
+  if (c.includes('governance')) {
+    return `Lock or delegate $${capital} of the governance asset through ${name} on ${chain} and cast one vote.`;
+  }
+  if (c.includes('otc')) {
+    return `Fill a $${capital} trade through the ${name} OTC desk on ${chain} and keep the settlement receipt.`;
+  }
+  if (c.includes('cedefi')) {
+    return `Deposit $${capital} of USDC into ${name} on ${chain}, hold the CeDeFi receipt, and read the custodian terms before depositing.`;
+  }
   if (c.includes('insurance')) {
     return `Buy $${capital} of cover from ${name} on ${chain} and keep the policy active.`;
   }
   return `Deposit $${capital} of USDC into ${name} (${p.category ?? 'protocol'}) on ${chain} and keep the position open.`;
+}
+
+/** Aksi mingguan agar wallet tetap terlihat aktif — beda tiap kelompok kategori. */
+function weeklyFor(p: SnapshotProtocol, chain: string): string {
+  const c = (p.category ?? '').toLowerCase();
+  const name = p.name;
+  if (c.includes('basis trading')) {
+    return `Check the funding rate on ${name} once a week and rebalance the hedge if the rate flips, so the delta-neutral position on ${chain} stays hedged.`;
+  }
+  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) {
+    return `Check the supply rate on ${name} once a week and top the position up if the rate falls, so the ${chain} lending position stays active.`;
+  }
+  if (c.includes('dex') || c.includes('liquidity manager') || c.includes('yield aggregator')) {
+    return `Check the pool APR on ${name} once a week and move the position if a better pool opens on ${chain}.`;
+  }
+  if (c.includes('yield') || c.includes('farm')) {
+    return `Check the vault yield on ${name} once a week and move to a better vault on ${chain} if this one dries up.`;
+  }
+  if (c.includes('bridge') || (c.includes('chain') && !c.includes('cross'))) {
+    return `Do one small swap or transfer on ${name} each week so the wallet keeps a fresh ${chain} transaction history.`;
+  }
+  if (c.includes('restak') || c.includes('staking')) {
+    return `Check the staking rewards on ${name} once a week and restake or claim them on ${chain}.`;
+  }
+  if (c.includes('perpetual') || c.includes('derivative') || c.includes('options')) {
+    return `Check the margin health on ${name} once a week and trim the position if it drifts toward liquidation on ${chain}.`;
+  }
+  if (c.includes('payments') || c.includes('card issuer')) {
+    return `Make one small real payment through ${name} each week so the ${chain} payment history stays fresh.`;
+  }
+  if (c.includes('prediction')) {
+    return `Take one small market position on ${name} each week so the wallet stays active on ${chain}.`;
+  }
+  if (c.includes('rwa') || c.includes('stable')) {
+    return `Check the yield accrual and redemption terms on ${name} once a week so the ${chain} position is never locked by surprise.`;
+  }
+  if (c.includes('curator') || c.includes('allocator')) {
+    return `Check the vault allocation on ${name} once a week and reallocate if the curator moves funds on ${chain}.`;
+  }
+  if (c.includes('insurance')) {
+    return `Check the cover on ${name} once a week and renew it before it lapses on ${chain}.`;
+  }
+  if (c.includes('governance')) {
+    return `Vote on one live proposal on ${name} each week so the ${chain} governance record stays active.`;
+  }
+  return `Do one qualifying action a week on ${name} — a deposit, a swap, or a vote — so the wallet stays visibly active in ${p.category ?? 'protocol'} on ${chain}.`;
+}
+
+/** Cara memeriksa dan mengklaim — beda tiap kelompok kategori. */
+function claimFor(p: SnapshotProtocol): string {
+  const c = (p.category ?? '').toLowerCase();
+  const name = p.name;
+  if (c.includes('basis trading')) {
+    return `Before withdrawing from ${name}, open its own points page from the link the protocol itself publishes, check the funding PnL of the hedge, and claim only there; never pay anyone to claim for you.`;
+  }
+  if (c.includes('payments') || c.includes('card issuer')) {
+    return `Before withdrawing from ${name}, open its own rewards page from the link the protocol itself publishes and claim only there; never pay anyone to claim for you.`;
+  }
+  if (c.includes('restak') || c.includes('staking')) {
+    return `Before withdrawing from ${name}, open its own staking rewards page from the link the protocol itself publishes, claim the accrued rewards, and unstake only there; never pay anyone to claim for you.`;
+  }
+  if (c.includes('rwa')) {
+    return `Before withdrawing from ${name}, open its own points or rewards page from the link the protocol itself publishes, check the redemption window, and claim only there; never pay anyone to claim for you.`;
+  }
+  return `Before withdrawing from ${name}, open its own points or rewards page from the link the protocol itself publishes and claim only there; never pay anyone to claim for you.`;
 }
 
 /** Satu langkah sebagai string tunggal: aksi, lalu biaya dan waktunya. */
@@ -327,39 +521,47 @@ export function stepText(step: FarmStep): string {
 /**
  * Rencana farm enam langkah. Setiap langkah menyebut nama protokol (dan
  * chain/kategorinya bila relevan), membawa biaya dan waktu, dan diturunkan
- * dari catatan protokol sendiri: kategori, chain, TVL, dan umur.
+ * dari catatan protokol sendiri: kategori, chain, TVL, dan umur. Biaya gas
+ * mengikuti chain pertama (Ethereum mahal, L2/BNB murah, Solana paling
+ * murah); langkah mingguan dan langkah klaim dibedakan per kategori; bila
+ * protokol multi-chain, chain keduanya disebut di langkah tahan.
  */
 export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
   const chain = chainOf(p);
+  const gas = gasRangeFor(chain);
   const capital = capitalFor(p);
   const hold = holdDaysFor(age);
   const category = p.category ?? 'protocol';
   const live = !isPreToken(p);
+  const second = secondChainOf(p);
+  const holdText =
+    `Hold the $${capital} position in ${p.name} for at least ${hold} days so the activity spans more than one snapshot window on ${chain}.` +
+    (second !== null ? ` The protocol is also live on ${second}; the same wallet active there counts as separate activity.` : '');
   return [
     {
       text: `Open a fresh wallet used only for ${p.name} on ${chain}, store its seed phrase offline, and fund it with gas for ${chain}.`,
-      cost: 'about $3 of gas for the setup',
+      cost: `about ${gas} of gas for the setup`,
       time: '10 minutes to prepare',
     },
     {
       text: actionFor(p, capital, chain),
-      cost: `$${capital} of capital plus about $${capital >= 150 ? 8 : 4} of gas`,
+      cost: `$${capital} of capital plus about ${gas} of gas`,
       time: '15 minutes to set up',
     },
     {
       text: live
-        ? `Do one qualifying action a week on ${p.name} — a deposit, a swap, or a vote — because its token already trades, so only ongoing ${category} activity on ${chain} still earns rewards.`
-        : `Do one qualifying action a week on ${p.name} — a deposit, a swap, or a vote — so the wallet stays visibly active in ${category} on ${chain}.`,
-      cost: 'about $2 of gas a week',
+        ? `${weeklyFor(p, chain)} Its token already trades, so only ongoing ${category} activity on ${chain} still earns rewards.`
+        : weeklyFor(p, chain),
+      cost: `about ${gas} of gas a week`,
       time: '10 minutes a week',
     },
     {
-      text: `Hold the $${capital} position in ${p.name} for at least ${hold} days so the activity spans more than one snapshot window on ${chain}.`,
+      text: holdText,
       cost: `the $${capital} stays in the position`,
       time: `${hold} days`,
     },
     {
-      text: `Before withdrawing from ${p.name}, open its own points or rewards page from the link the protocol itself publishes and claim only there; never pay anyone to claim for you.`,
+      text: claimFor(p),
       cost: 'no fee to check, and never pay to claim',
       time: '10 minutes',
     },
@@ -401,8 +603,10 @@ function toBoardRow(p: SnapshotProtocol, v: ReturnType<typeof impliedValue>, ran
 
 /**
  * Board 200 baris pre-token saja: watchlist + early, dinilai dan berperingkat
- * 1..200. Di snapshot ini seluruh watchlist (40) adalah pre-token, jadi board
- * tidak memuat satu pun live-token.
+ * 1..200. Early dipilih BERDASARKAN implied value, bukan TVL: semua kandidat
+ * early yang eligible dinilai dulu dengan impliedValue(), lalu 160 teratas
+ * diambil (seri diputus slug menaik). Di snapshot ini seluruh watchlist (40)
+ * adalah pre-token, jadi board tidak memuat satu pun live-token.
  */
 export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
   const index = bySlug(snapshot.protocols);
@@ -413,8 +617,10 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
   }
   const early = snapshot.protocols
     .filter((p) => !chosen.has(p.slug) && isEarlyEligible(p))
-    .sort(byValueThenSlug((p) => p.tvl_usd, (p) => p.slug))
-    .slice(0, EARLY_ROWS);
+    .map((p) => ({ p, v: impliedValue(p, snapshot.as_of, model) }))
+    .sort(byValueThenSlug((s) => s.v.implied, (s) => s.p.slug))
+    .slice(0, EARLY_ROWS)
+    .map((s) => s.p);
   for (const p of early) chosen.set(p.slug, p);
 
   const scored = [...chosen.values()].map((p) => ({ p, v: impliedValue(p, snapshot.as_of, model) }));
@@ -448,6 +654,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     asOf: snapshot.as_of,
     floorUsd: snapshot.floor_usd,
     watchlistCount: snapshot.watchlist.length,
+    watchlist: [...snapshot.watchlist],
     source: snapshot.source,
     model,
     modelVersion: MODEL_VERSION,

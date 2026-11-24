@@ -75,6 +75,7 @@ button { cursor: pointer; }
 .model-steps em { font-style: normal; color: var(--muted); font-size: 12.5px; }
 .model-steps code, .formula code { font-family: var(--font-num); color: var(--cyan); font-size: .92em; }
 .formula { margin-top: var(--s4); padding: var(--s3) var(--s4); background: var(--bg); border: 1px dashed var(--line); border-radius: var(--radius-sm); font-family: var(--font-num); font-size: 13px; color: var(--ink); overflow-x: auto; white-space: nowrap; }
+.calibration { margin-top: var(--s3); color: var(--muted); font-size: 12.5px; max-width: 90ch; }
 .disclaimer { margin-top: var(--s3); color: var(--faint); font-size: 12.5px; }
 
 /* Toolbar */
@@ -83,6 +84,8 @@ button { cursor: pointer; }
 .field > span { color: var(--muted); font-size: 12px; }
 .field.grow { flex: 1 1 260px; }
 .field input, .field select { min-height: 38px; padding: 0 var(--s3); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
+.toggle { display: flex; align-items: center; gap: var(--s2); min-height: 38px; padding: 0 var(--s3); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); font-size: 13.5px; white-space: nowrap; cursor: pointer; }
+.toggle input { width: 16px; height: 16px; accent-color: var(--amber); }
 .field input { width: 100%; }
 .field input::placeholder { color: var(--faint); }
 .tabs { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }

@@ -42,6 +42,7 @@
       <li><b>Maturity</b><span><code id="m-floor">maturity floor</code> + age up to <code id="m-days">maturity cap</code> days × <code id="m-range">maturity range</code></span><em>Longer running with no token counts for more.</em></li>
     </ol>
     <p class="formula" id="formula">implied&nbsp;=&nbsp;round(&nbsp;tvl_usd&nbsp;×&nbsp;base&nbsp;×&nbsp;(1&nbsp;+&nbsp;clamped&nbsp;7d&nbsp;change&nbsp;×&nbsp;weight)&nbsp;×&nbsp;maturity&nbsp;)</p>
+    <p class="calibration" id="calibration">Calibration: base multiples come from the live-token protocols in this snapshot.</p>
     <p class="disclaimer">Implied value is the model's claim, not a price and not a promise. A protocol that records no token may still have one its record does not carry.</p>
   </section>
 
@@ -53,6 +54,14 @@
     <label class="field">
       <span>Category</span>
       <select id="category" aria-label="Filter by category"></select>
+    </label>
+    <label class="field">
+      <span>Chain</span>
+      <select id="chain" aria-label="Filter by chain"></select>
+    </label>
+    <label class="field">
+      <span>Watchlist</span>
+      <span class="toggle"><input type="checkbox" id="watch-only"> Watchlist only</span>
     </label>
     <div class="field">
       <span>Token status</span>
@@ -80,7 +89,7 @@
     </div>
   </main>
 
-  <p class="footnote">Source: the sealed DefiLlama protocol snapshot. “No token” means the protocol's record carries no token — not proof that none exists. Farm plans are generic steps derived from category, chains, TVL and age; check the protocol's own pages before moving funds.</p>
+  <p class="footnote">Source: the sealed DefiLlama protocol snapshot. “No token” means the protocol's record carries no token — not proof that none exists. Farm plans are category- and chain-specific steps derived from category, chains, TVL and age; check the protocol's own pages before moving funds.</p>
 </div>
 
 <dialog class="detail" id="detail" aria-labelledby="detail-title">

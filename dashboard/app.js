@@ -28,8 +28,12 @@
   var AS_OF = (DATA && (DATA.asOf || DATA.as_of)) || null;
   var FLOOR = (DATA && (DATA.floorUsd !== undefined ? DATA.floorUsd : DATA.floor_usd)) || null;
   var WATCH = (DATA && (DATA.watchlistCount !== undefined ? DATA.watchlistCount : DATA.watchlist_size)) || null;
+  var WATCH_SLUGS = (DATA && Array.isArray(DATA.watchlist)) ? DATA.watchlist : null;
+  var WATCH_SET = {};
+  if (WATCH_SLUGS) WATCH_SLUGS.forEach(function (s) { WATCH_SET[s] = true; });
+  function isWatch(r) { return WATCH_SLUGS ? !!WATCH_SET[r.slug] : false; }
 
-  var state = { q: '', category: 'all', tab: 'pre-token', sort: 'value', dir: -1, selected: null };
+  var state = { q: '', category: 'all', chain: 'all', watchOnly: false, tab: 'pre-token', sort: 'value', dir: -1, selected: null };
   var $ = function (id) { return document.getElementById(id); };
   var hasData = ALL.length > 0;
 
@@ -76,10 +80,28 @@
     return v;
   }
   /* Size discount from the model constants (DATA.model): giant protocols
-     are valued cheaper per TVL dollar. Without it the modal's recompute
-     overshoots the board for every protocol with TVL >= $500M. */
+     are valued cheaper per TVL dollar. radar-4 carries size_tiers
+     (min_tvl -> discount, largest first); older data files carry the two
+     radar-3 fields, which are read as a fallback. Without it the modal's
+     recompute overshoots the board for every protocol with TVL >= $100M. */
+  function fmtTier(tvl) {
+    if (tvl === null) return '—';
+    if (tvl >= 5e9) return 'over $5B';
+    if (tvl >= 1e9) return '$1B–$5B';
+    if (tvl >= 5e8) return '$500M–$1B';
+    if (tvl >= 1e8) return '$100M–$500M';
+    return 'under $100M';
+  }
   function sizeDiscount(tvl) {
     if (!MODEL || tvl === null) return null;
+    var tiers = MODEL.size_tiers;
+    if (Array.isArray(tiers) && tiers.length) {
+      for (var i = 0; i < tiers.length; i++) {
+        var t = tiers[i];
+        if (tvl >= num(t.min_tvl)) return { mult: num(t.discount), label: 'TVL ' + fmtTier(tvl) };
+      }
+      return { mult: 1, label: 'TVL under $100M' };
+    }
     var over1b = num(MODEL.size_discount_over_1b), mid = num(MODEL.size_discount_500m_1b);
     var t1 = num(MODEL.size_threshold_1b), t5 = num(MODEL.size_threshold_500m);
     if (t1 !== null && over1b !== null && tvl > t1) return { mult: over1b, label: 'TVL over $1B' };
@@ -120,6 +142,8 @@
     var q = state.q.trim().toLowerCase();
     return pool().filter(function (r) {
       if (state.category !== 'all' && catOf(r) !== state.category) return false;
+      if (state.chain !== 'all' && (r.chains || []).indexOf(state.chain) < 0) return false;
+      if (state.watchOnly && !isWatch(r)) return false;
       if (!q) return true;
       var hay = [r.name, r.slug, catOf(r), (r.chains || []).join(' '), r.symbol || ''].join(' ').toLowerCase();
       return hay.indexOf(q) >= 0;
@@ -155,12 +179,23 @@
     { key: 'age', label: 'Age', cls: 'num' },
     { key: 'value', label: 'Implied value', cls: 'num' }
   ];
-  function valueLabel() { return state.tab === 'live-token' ? 'Market cap' : 'Implied value'; }
+  function valueLabel() {
+    if (state.tab === 'live-token') return 'Market cap';
+    if (state.tab === 'all') return 'Implied / mcap';
+    return 'Implied value';
+  }
 
   function renderHead() {
     $('head-row').innerHTML = COLS.map(function (c) {
       var label = c.key === 'value' ? valueLabel() : c.label;
       var arrow = state.sort === c.key ? '<span class="arrow" aria-hidden="true">' + (state.dir < 0 ? '↓' : '↑') + '</span>' : '';
+      /* In the All tab the value column mixes two different things — implied
+         value (pre-token) and market cap (live) — so it cannot be sorted as
+         one number. The button is disabled there; sort by value in the
+         Pre-token or Live token tab instead. */
+      if (c.key === 'value' && state.tab === 'all') {
+        return '<th scope="col" class="' + c.cls + '"><button type="button" disabled title="Implied value and market cap are not comparable — sort by value in the Pre-token or Live token tab">' + esc(label) + '</button></th>';
+      }
       return '<th scope="col" class="' + c.cls + '"><button type="button" data-sort="' + c.key + '" aria-label="Sort by ' + esc(label) + '">' + esc(label) + arrow + '</button></th>';
     }).join('');
   }
@@ -172,7 +207,7 @@
     var pct = maxTvl > 0 && tvl !== null ? Math.max(2, Math.round((tvl / maxTvl) * 100)) : 0;
     var v = valueOf(r);
     return '<tr data-slug="' + esc(r.slug) + '" data-live="' + live + '" tabindex="0">' +
-      '<td class="num">' + (live || num(r.rank) === null ? '—' : esc(r.rank)) + '</td>' +
+      '<td class="num">' + (live ? (num(r.rank) === null ? '—' : 'L' + esc(r.rank)) : (num(r.rank) === null ? '—' : esc(r.rank))) + '</td>' +
       '<td><span class="cell-name"><b>' + esc(r.name || r.slug) + '</b>' +
       '<span class="badge ' + (live ? 'live' : 'pre') + '">' + (live ? 'live token' : 'pre-token') + '</span></span>' +
       '<span class="cell-sub">' + esc(chainsOf(r)) + (r.symbol ? ' · ' + esc(r.symbol) : '') + '</span></td>' +
@@ -211,8 +246,9 @@
   function renderMeta() {
     $('meta-asof').textContent = AS_OF || '—';
     $('meta-floor').textContent = FLOOR !== null ? fmtUsd(FLOOR) : '—';
-    $('meta-rows').textContent = hasData ? String(ALL.length) : '—';
-    $('stat-watch').textContent = WATCH !== null ? WATCH + ' / ' + WATCH : String(PRE.length);
+    $('meta-rows').textContent = hasData ? String(PRE.length) : '—';
+    var onBoard = WATCH_SLUGS ? PRE.filter(isWatch).length : PRE.length;
+    $('stat-watch').textContent = WATCH !== null ? onBoard + ' / ' + WATCH : String(onBoard);
     $('stat-board').textContent = String(PRE.length);
     var top = PRE.slice().sort(function (a, b) { return (num(b.implied_value_usd) || 0) - (num(a.implied_value_usd) || 0); })[0];
     $('stat-top').textContent = top ? fmtUsd(top.implied_value_usd) : '—';
@@ -234,20 +270,43 @@
     set('m-days', num(MODEL.maturity_days));
     set('m-range', num(MODEL.maturity_range));
     if (base !== null) {
-      var sdOver = num(MODEL.size_discount_over_1b), sdMid = num(MODEL.size_discount_500m_1b);
-      var sdText = (sdOver !== null && sdMid !== null)
-        ? ' × size discount (' + sdOver + ' over $1B, ' + sdMid + ' $500M–$1B, 1 below)'
-        : '';
+      var sdText;
+      var tiers = MODEL.size_tiers;
+      if (Array.isArray(tiers) && tiers.length) {
+        var parts = tiers.slice().sort(function (a, b) { return num(b.min_tvl) - num(a.min_tvl); })
+          .map(function (t) { return t.discount + ' over $' + (num(t.min_tvl) / 1e9 >= 1 ? (num(t.min_tvl) / 1e9) + 'B' : (num(t.min_tvl) / 1e6) + 'M'); });
+        sdText = ' × size discount (1 below $100M, ' + parts.join(', ') + ')';
+      } else {
+        var sdOver = num(MODEL.size_discount_over_1b), sdMid = num(MODEL.size_discount_500m_1b);
+        sdText = (sdOver !== null && sdMid !== null)
+          ? ' × size discount (' + sdOver + ' over $1B, ' + sdMid + ' $500M–$1B, 1 below)'
+          : '';
+      }
       var formula = 'implied = round( tvl_usd × ' + base + sdText +
         ' × (1 + clamp(change_7d, ' + MODEL.growth_floor + ', ' + MODEL.growth_cap + ') / 100 × ' + MODEL.growth_weight +
         ') × (' + MODEL.maturity_floor + ' + min(age_days, ' + MODEL.maturity_days + ') / ' + MODEL.maturity_days +
         ' × ' + MODEL.maturity_range + ') )';
       var mults = MODEL.base_multiples;
       if (mults && typeof mults === 'object') {
-        var parts = Object.keys(mults).sort().map(function (k) { return k + ' ' + mults[k]; });
-        if (parts.length) formula += ' — base by category: ' + parts.join(', ') + '; other categories use the default ' + base + '.';
+        var mparts = Object.keys(mults).sort().map(function (k) { return k + ' ' + mults[k]; });
+        if (mparts.length) formula += ' — base by category: ' + mparts.join(', ') + '; other categories use the default ' + base + '.';
       }
       $('formula').textContent = formula;
+    }
+    /* Calibration note, from the model constants: base multiples are the
+       winsorized live-token mcap/TVL medians, shrunk toward the global
+       median — and growth/maturity are scoring priors, not predictors:
+       on live tokens their correlation with log(mcap/TVL) is ~0. */
+    var cal = $('calibration');
+    if (cal && MODEL) {
+      var gm = num(MODEL.global_live_median), gn = num(MODEL.global_live_n);
+      cal.textContent = 'Calibration: base multiples are the live-token mcap/TVL medians ' +
+        '(winsorized to 0.005–2.0, per category n≥5, shrunk toward the global median' +
+        (gm !== null ? ' ' + gm : '') + (gn !== null ? ' over ' + gn + ' live-token protocols' : '') +
+        ', clamped to 0.05–0.40). ' +
+        'On the 128 live-token protocols with market cap above $0, log(mcap/TVL) correlates 0.004 with the 7-day change ' +
+        'and 0.063 with age — near zero — so growth and maturity are scoring priors the brief asks for, not predictors of valuation. ' +
+        'Validation on those 128: median implied/market-cap 0.80, 40 in 0.5–2× (radar-3: 0.45, 29).';
     }
   }
   function renderCategories() {
@@ -256,6 +315,13 @@
     cats.sort();
     $('category').innerHTML = '<option value="all">All categories</option>' +
       cats.map(function (c) { return '<option value="' + esc(c) + '"' + (c === state.category ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('');
+  }
+  function renderChains() {
+    var chains = [];
+    ALL.forEach(function (r) { (r.chains || []).forEach(function (c) { if (chains.indexOf(c) < 0) chains.push(c); }); });
+    chains.sort();
+    $('chain').innerHTML = '<option value="all">All chains</option>' +
+      chains.map(function (c) { return '<option value="' + esc(c) + '"' + (c === state.chain ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('');
   }
   function renderTabs() {
     ['all', 'pre-token', 'live-token'].forEach(function (t) {
@@ -278,6 +344,31 @@
   var dialog = $('detail');
   function kv(label, value) {
     return '<div class="kv"><span>' + esc(label) + '</span><b>' + value + '</b></div>';
+  }
+  /* Category benchmark: this row's implied/TVL (pre-token) or mcap/TVL
+     (live) against the median mcap/TVL of live-token protocols in the same
+     category — or the global live median when the category has no benchmark. */
+  function benchmarkHtml(r) {
+    if (!MODEL) return '';
+    var meds = MODEL.live_category_medians || {};
+    var cat = catOf(r);
+    var bm = meds[cat] || null;
+    var med = bm ? num(bm.median) : num(MODEL.global_live_median);
+    var n = bm ? num(bm.n) : num(MODEL.global_live_n);
+    var tvl = num(r.tvl_usd);
+    var ratio = null;
+    if (tvl) ratio = isLive(r) ? num(r.mcap_usd) / tvl : num(r.implied_value_usd) / tvl;
+    if (ratio === null || med === null) return '';
+    var label = isLive(r) ? 'Market cap / TVL' : 'Implied value / TVL';
+    var benchLabel = bm
+      ? 'Live-token median mcap/TVL, ' + cat + ' (n=' + n + ')'
+      : 'Live-token median mcap/TVL, all categories (n=' + n + ')';
+    var vs = ratio >= med ? 'above' : 'below';
+    return '<div class="row"><span>' + esc(label) + ' — this row</span><b>' + ratio.toFixed(2) + '×</b></div>' +
+      '<div class="row"><span>' + esc(benchLabel) + '</span><b>' + med.toFixed(2) + '×</b></div>' +
+      '<p class="check">This row sits ' + vs + ' the live-token median for its category. ' +
+      'The median comes from the snapshot\u2019s own live-token protocols (mcap/TVL winsorized to 0.005–2.0); ' +
+      'it is a benchmark, not a target.</p>';
   }
   function openDetail(slug) {
     var r = null;
@@ -313,6 +404,7 @@
         '<div class="row"><span>Growth — 7d ' + fmtPct(r.change_7d) + (bd.growthPct !== null && bd.growthPct !== num(r.change_7d) ? ' (clamped to ' + bd.growthPct + '%)' : '') + '</span><b>× ' + bd.growthMult.toFixed(4) + '</b></div>' +
         '<div class="row"><span>Maturity — ' + fmtAge(r.age_days) + ' with no token</span><b>× ' + bd.maturityMult.toFixed(4) + '</b></div>' +
         '<div class="row total"><span>Implied value</span><b>' + esc(fmtUsd(r.implied_value_usd)) + '</b></div>' +
+        benchmarkHtml(r) +
         '<p class="check">Recomputed from these inputs: ' + esc(fmtUsd(bd.recomputed)) +
         (matches ? ' — matches the board (within rounding).' : ' — differs from the board; the data may be stale.') + '</p>' +
         '</div></section>';
@@ -330,6 +422,7 @@
         '<div class="row"><span>Market cap (the market\u2019s own value)</span><b>' + esc(fmtUsd(r.mcap_usd)) + '</b></div>' +
         '<div class="row"><span>TVL</span><b>' + esc(fmtUsd(r.tvl_usd)) + '</b></div>' +
         '<div class="row"><span>Market cap / TVL</span><b>' + esc(ratio) + '</b></div>' +
+        benchmarkHtml(r) +
         '<p class="check">This protocol already trades, so it is set aside from the pre-token ranking — its market cap is a fact, not a model.</p>' +
         '</div></section>';
     }
@@ -370,8 +463,16 @@
   /* ---------- events ---------- */
   $('q').addEventListener('input', function (e) { state.q = e.target.value; renderTable(); });
   $('category').addEventListener('change', function (e) { state.category = e.target.value; renderTable(); });
+  $('chain').addEventListener('change', function (e) { state.chain = e.target.value; renderTable(); });
+  $('watch-only').addEventListener('change', function (e) { state.watchOnly = e.target.checked; renderTable(); });
   document.querySelectorAll('[data-tab]').forEach(function (b) {
-    b.addEventListener('click', function () { state.tab = b.getAttribute('data-tab'); renderAll(); });
+    b.addEventListener('click', function () {
+      state.tab = b.getAttribute('data-tab');
+      /* Value cannot be sorted in the All tab (implied vs market cap), so
+         fall back to TVL when switching there with a value sort active. */
+      if (state.tab === 'all' && state.sort === 'value') { state.sort = 'tvl'; state.dir = -1; }
+      renderAll();
+    });
   });
   $('head-row').addEventListener('click', function (e) {
     var b = e.target.closest ? e.target.closest('[data-sort]') : null;
@@ -394,6 +495,8 @@
   $('clear-filters').addEventListener('click', function () {
     state.q = ''; $('q').value = '';
     state.category = 'all'; renderCategories();
+    state.chain = 'all'; renderChains();
+    state.watchOnly = false; $('watch-only').checked = false;
     renderTable();
   });
   dialog.addEventListener('click', function (e) {
@@ -410,6 +513,7 @@
   renderMeta();
   renderModel();
   renderCategories();
+  renderChains();
   renderAll();
   readHash();
   if (state.selected) openDetail(state.selected);
