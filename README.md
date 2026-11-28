@@ -38,7 +38,7 @@ Program keluar dengan kode 1 bila board tidak lolos validasi internal atau
 screenshot kurang dari 3. Semua run deterministik: tanpa `Date.now()` /
 `Math.random()`, setiap sort punya tie-break slug menaik.
 
-## Model (`lib/model.ts`, `MODEL_VERSION = radar-4`)
+## Model (`lib/model.ts`, `MODEL_VERSION = radar-5`)
 
 Pre-token ketat: `gecko_id` null **dan** `mcap_usd` null. Live-token:
 `gecko_id` non-null (token sudah diperdagangkan; market cap-nya ditampilkan
@@ -55,18 +55,18 @@ Restaking dan nama berakhiran penanda versi). Live-token tidak masuk board:
 rumus yang sama), diperingkat 1..24 menurut market cap untuk tab Live token
 di dashboard.
 
-Implied value per baris — base dikalibrasi dari rasio mcap/TVL live-token
-snapshot ini (144 live-token, rasio di-winsorize ke 0,005–2,0; median per
-kategori hanya untuk n>=5, di-shrink ke median global 0,169 dengan bobot
-n/(n+5), lalu dibatasi 0,05–0,40; kategori n<5 memakai default 0,169):
+Implied value per baris — diskon ukuran dari fit power-law atas rasio
+mcap/TVL live-token (slope −0,392: rasio jatuh ~2,5x tiap 10x TVL),
+base per kategori dari median residual setelah efek ukuran, growth, dan
+maturity dibuang:
 
 ```
 base      = TVL x BASE_MULTIPLE[kategori]
-  Basis Trading 0.362, Canonical Bridge 0.400, Dexs 0.288, RWA 0.237,
-  Lending 0.142, Yield 0.134, Bridge 0.119, Yield Aggregator 0.110,
-  CEX 0.095, Liquid Staking 0.076, lainnya 0.169
-sizeDisc  = 1.00 di bawah $100 jt; 0.80 $100–500 jt; 0.65 $500 jt–$1 M;
-            0.50 $1–5 M; 0.35 di atas $5 M
+  Basis Trading 0.600, Canonical Bridge 0.600, CEX 0.529, Bridge 0.510,
+  RWA 0.381, Yield 0.373, Dexs 0.312, Lending 0.226,
+  Liquid Staking 0.190, lainnya 0.320
+sizeDisc  = 1.00 di bawah $50 jt; 0.612 $50–100 jt; 0.372 $100–500 jt;
+            0.248 $500 jt–$1 M; 0.164 $1–5 M; 0.087 di atas $5 M
 growth    = 1 + clip(change_7d, -60, +60)/100 x 0.5   (null -> 0)
 maturity  = 0.7 + min(umur_hari, 1095)/1095 x 0.5
             (listed_at null atau 2025-05-20, tanggal default yang meragukan -> 1.0 netral;
@@ -74,13 +74,27 @@ maturity  = 0.7 + min(umur_hari, 1095)/1095 x 0.5
 implied   = max(1, round(TVL x base x sizeDisc x growth x maturity)), dibatasi 1.0 x TVL
 ```
 
+Base adalah median residual mcap/(TVL × sizeDisc × growth × maturity) per
+kategori (n≥5, winsorize 0,005–2,0, shrink ke median residual global 0,320
+bobot n/(n+5), clamp 0,05–0,60); kategori n<5 memakai default 0,320.
+Median mcap/TVL mentah per kategori dan per bucket TVL tetap disimpan
+sebagai benchmark mentah untuk modal detail (kategori: Basis Trading 0,482,
+Dexs 0,342, RWA 0,275, Lending 0,132; bucket TVL: <$50 jt 0,419, $50–100 jt
+0,171, $100–500 jt 0,125, $500 jt–$1 M 0,034, $1–5 M 0,029, >$5 M 0,044 —
+pola yang sama muncul di data segar 28 Nov 2026).
+
 Growth dan maturity adalah prior penilaian yang diminta kriteria, bukan
 klaim prediktif: pada 128 live-token bermcap > $0, korelasi log(mcap/TVL)
 dengan change_7d adalah 0,004 dan dengan umur 0,063 — praktis nol.
 
 Validasi pada 128 live-token bermcap > $0 (implied rumus yang sama vs mcap
-sebenarnya): radar-4 median implied/mcap 0,804, 40/128 dalam 0,5–2x,
-66/128 dalam 0,25–4x (radar-3: median 0,453, 29/128, 64/128).
+sebenarnya): radar-5 median implied/mcap 1,050, 40/128 dalam 0,5–2x,
+77/128 dalam 0,25–4x, mean |log error| 1,538 (radar-4: median 0,804, 40/128,
+66/128, 1,639; radar-3: median 0,453, 29/128, 64/128). Dicek ulang pada
+120 live-token dari data DefiLlama segar 28 Nov 2026 (TVL ≥ $5 jt):
+median 1,122, 40/120 dalam 0,5–2x, 71/120 dalam 0,25–4x, mean |log error|
+1,473 (radar-4: 0,764, 39/120, 62/120, 1,569). Radar-5 menang berpasangan
+atas radar-4 di 72/128 token (set snapshot) dan 71/120 (set segar).
 
 Sort: implied menurun, seri diputus slug menaik. Rank 1..N.
 
@@ -119,13 +133,16 @@ screenshots/             1-board.png, 2-detail.png, 3-filtered.png
 ## Status
 
 - `main.ts` + `lib/model.ts`: selesai, tervalidasi lokal dengan snapshot kit
-  (revisi radar-4: base terkalibrasi live-token, diskon ukuran bertingkat,
-  seleksi early by implied, farm plan per kategori/chain; validasi live-token
-  median implied/mcap 0,804, 40/128 dalam 0,5–2x).
+  (revisi radar-5: diskon ukuran dari fit power-law log(mcap/TVL) ~ log(TVL)
+  slope −0,392, base dari median residual per kategori, clamp 0,05–0,60;
+  validasi live-token median implied/mcap 1,050, 40/128 dalam 0,5–2x,
+  77/128 dalam 0,25–4x; dicek ulang di 120 live-token segar 28 Nov 2026:
+  median 1,122, 71/120 dalam 0,25–4x).
 - `dashboard/`: `index.html` + `app.css` + `app.js` sudah ada; `app.js`
   membaca `window.RADAR.board.rows` dan `window.RADAR.live` (dengan fallback
   ke bentuk lama), serta memakai tab Live token dari array `live`; filter
-  chain + toggle "Watchlist only", benchmark kategori di modal detail.
+  chain + toggle "Watchlist only", benchmark kategori DAN benchmark ukuran
+  di modal detail.
 - `screenshots/`: 1-board.png, 2-detail.png (Ethena USDe, rank 1),
-  3-filtered.png (filter chain Solana, 35 of 200) sudah ada, di-render ulang
-  untuk radar-4.
+  3-filtered.png (filter chain Solana) sudah ada, di-render ulang
+  untuk radar-5.

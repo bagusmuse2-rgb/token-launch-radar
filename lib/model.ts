@@ -14,27 +14,40 @@
 // agar dashboard bisa menampilkannya di tab Live tanpa mencampuri ranking
 // pre-token.
 //
-// Implied value, untuk setiap baris (radar-4):
+// Implied value, untuk setiap baris (radar-5):
 //
 //   base      = TVL x BASE_MULTIPLE[kategori]   (dikalibrasi dari live-token, lihat MODEL)
-//   sizeDisc  = 1.00 di bawah $100 jt; 0.80 $100-500 jt; 0.65 $500 jt-$1 M;
-//               0.50 $1-5 M; 0.35 di atas $5 M
+//   sizeDisc  = 1.00 di bawah $50 jt; 0.612 $50-100 jt; 0.372 $100-500 jt;
+//               0.248 $500 jt-$1 M; 0.164 $1-5 M; 0.087 di atas $5 M
 //   growth    = 1 + clip(change_7d, -60, +60) / 100 x 0.5   (null -> 0)
 //   maturity  = 0.7 + min(umur_hari, 1095) / 1095 x 0.5
 //               (listed_at null, atau tanggal default 2025-05-20 yang meragukan -> 1.0 netral)
 //   implied   = max(1, round(TVL x base x sizeDisc x growth x maturity)), dibatasi 1.0 x TVL
 //
-// Kalibrasi base (snapshot 2026-11-14, 758 protokol): rasio mcap/TVL dari 144
-// live-token di-winsorize (jepit ke 0,005-2,0; 15 protokol bermcap 0 dan 1
-// bermcap -1 ikut terjepit ke 0,005), median per kategori hanya untuk n>=5,
-// di-shrink ke median global 0,169 dengan bobot n/(n+5), lalu dibatasi ke
-// 0,05-0,40. Kategori n<5 atau tanpa pembanding live memakai default 0,169
-// (median global). Diskon ukuran bertingkat dari median rasio per bucket TVL
-// (<$50 jt 0,307; $50-100 jt 0,149; $100-500 jt 0,082; $500 jt-$1 M 0,034;
-// $1-5 M 0,030; >$5 M 0,044 — rasio jatuh ~5x dari kecil ke besar), tapi
-// dibuat lebih dangkal dari rasio bucket mentah karena base per kategori
-// sudah menyerap sebagian efek ukuran; tier yang lebih curam justru
-// menurunkan validasi (lihat VALIDASI di bawah).
+// Kalibrasi base (snapshot 2026-11-14, 758 protokol) — dua langkah, keduanya
+// dari 128 live-token bermcap > $0:
+//   1. Efek ukuran: log(mcap/TVL) diregresi ke log(TVL) — slope -0,392
+//      (rasio jatuh ~2,5x tiap 10x TVL; median mentah per bucket: <$50 jt
+//      0,419; $50-100 jt 0,171; $100-500 jt 0,125; $500 jt-$1 M 0,034;
+//      $1-5 M 0,029; >$5 M 0,044 — pola yang sama muncul di data segar
+//      28 Nov 2026: 0,412; 0,180; 0,133; 0,031; 0,037; 0,039). Slope itu
+//      didiskretkan ke enam tier di atas (titik tengah tiap bucket).
+//   2. Base per kategori: median RESIDUAL mcap/(TVL x sizeDisc x growth x
+//      maturity) per kategori (rasio di-winsorize 0,005-2,0; hanya n>=5),
+//      di-shrink ke median residual global 0,320 dengan bobot n/(n+5), lalu
+//      dibatasi 0,05-0,60. Langkah residual ini yang memperbaiki radar-4:
+//      base radar-4 dikalibrasi dari median mcap/TVL mentah, padahal
+//      sizeDisc x growth x maturity yang dikalikan sesudahnya rata-rata
+//      ~0,8 — jadi implied sistematis 20% di bawah mcap.
+// Residual median per kategori: Lending 0,194 (n=15) · Dexs 0,309 (n=11) ·
+// Yield 0,402 (n=9) · Liquid Staking 0,117 (n=9) · CEX 0,645 (n=9) ·
+// RWA 0,415 (n=9) · Canonical Bridge 1,279 (n=8) · Basis Trading 1,117
+// (n=7) · Bridge 0,667 (n=6). Canonical Bridge dan Basis Trading kena cap
+// 0,60 setelah shrink. Kategori n<5 memakai default 0,320 (median residual
+// global). Median mcap/TVL mentah per kategori tetap disimpan di
+// `live_category_medians` (dan median global mentah 0,169 di
+// `global_live_median`) sebagai benchmark mentah untuk modal dashboard;
+// median mcap/TVL mentah per bucket TVL disimpan di `live_size_medians`.
 //
 // Growth dan maturity BUKAN klaim prediktif: pada 128 live-token bermcap > $0,
 // korelasi log(mcap/TVL) dengan change_7d adalah 0,004 dan dengan umur 0,063
@@ -46,9 +59,15 @@
 // dibandingkan dengan mcap sebenarnya):
 //   radar-3: median implied/mcap 0,453; 29/128 dalam 0,5-2x; 64/128 dalam 0,25-4x
 //   radar-4: median implied/mcap 0,804; 40/128 dalam 0,5-2x; 66/128 dalam 0,25-4x
+//   radar-5: median implied/mcap 1,050; 40/128 dalam 0,5-2x; 77/128 dalam 0,25-4x;
+//            mean |log error| 1,538 (radar-4: 1,639); menang berpasangan atas
+//            radar-4 di 72/128 token
+//   radar-5 di set segar (120 live-token DefiLlama 28 Nov 2026, TVL>=$5 jt):
+//            median 1,122; 40/120 dalam 0,5-2x; 71/120 dalam 0,25-4x;
+//            mean |log error| 1,473 (radar-4: 1,569); menang berpasangan 71/120
 // Model starter (base datar 0,25, tanpa diskon ukuran) sebagai pembanding:
-// median 1,199; 37/128 dalam 0,5-2x. Radar-4 masih konservatif (median < 1),
-// tapi jauh lebih dekat daripada radar-3.
+// median 1,199; 37/128 dalam 0,5-2x. Radar-5 memusatkan median ke ~1,0 dan
+// memperbaiki hit 0,25-4x di kedua set tanpa merusak hit 0,5-2x.
 //
 // Urutan: implied menurun, seri diputus slug menaik. Rank 1..N.
 
@@ -87,6 +106,13 @@ export interface CategoryBenchmark {
   median: number;
 }
 
+/** Median rasio mcap/TVL mentah live-token untuk satu bucket TVL. */
+export interface SizeBucketBenchmark {
+  min_tvl: number;
+  median: number;
+  n: number;
+}
+
 /** Konstanta model yang bisa dibaca dashboard. */
 export interface ModelConstants {
   base_multiples: Record<string, number>;
@@ -103,38 +129,42 @@ export interface ModelConstants {
   global_live_median: number;
   global_live_n: number;
   live_category_medians: Record<string, CategoryBenchmark>;
+  /** Median mcap/TVL mentah per bucket TVL (benchmark ukuran di modal). */
+  live_size_medians: SizeBucketBenchmark[];
 }
 
 export const MODEL: ModelConstants = {
-  // Base per kategori (n>=5 saja), hasil shrink median winsorized ke median
-  // global 0,169 — bobot n/(n+5) — lalu clamp 0,05-0,40:
-  //   Lending 0,142 (n=15, median 0,132) · Yield 0,134 (n=13, median 0,121)
-  //   Liquid Staking 0,076 (n=11, median 0,034) · Dexs 0,288 (n=11, median 0,342)
-  //   CEX 0,095 (n=11, median 0,062) · RWA 0,237 (n=9, median 0,275)
-  //   Canonical Bridge 0,400 (n=8, median 0,746 -> shrink 0,524, kena cap)
-  //   Basis Trading 0,362 (n=8, median 0,482) · Bridge 0,119 (n=8, median 0,088)
-  //   Yield Aggregator 0,110 (n=5, median 0,050; shrink menariknya ke atas
-  //   menuju median global — median mentahnya 0,050, bukan 0,110)
+  // Base per kategori (n>=5 saja), hasil shrink median RESIDUAL
+  // mcap/(TVL x sizeDisc x growth x maturity) ke median residual global
+  // 0,320 — bobot n/(n+5) — lalu clamp 0,05-0,60:
+  //   Basis Trading 0,600 (n=7, residual 1,117 -> kena cap) ·
+  //   Canonical Bridge 0,600 (n=8, residual 1,279 -> kena cap) ·
+  //   CEX 0,529 (n=9, residual 0,645) · Bridge 0,510 (n=6, residual 0,667)
+  //   RWA 0,381 (n=9, residual 0,415) · Yield 0,373 (n=9, residual 0,402)
+  //   Dexs 0,312 (n=11, residual 0,309) · Lending 0,226 (n=15, residual 0,194)
+  //   Liquid Staking 0,190 (n=9, residual 0,117)
   base_multiples: {
-    'Basis Trading': 0.362,
-    'Canonical Bridge': 0.4,
-    Dexs: 0.288,
-    RWA: 0.237,
-    Lending: 0.142,
-    Yield: 0.134,
-    Bridge: 0.119,
-    'Yield Aggregator': 0.11,
-    CEX: 0.095,
-    'Liquid Staking': 0.076,
+    'Basis Trading': 0.6,
+    'Canonical Bridge': 0.6,
+    CEX: 0.529,
+    Bridge: 0.51,
+    RWA: 0.381,
+    Yield: 0.373,
+    Dexs: 0.312,
+    Lending: 0.226,
+    'Liquid Staking': 0.19,
   },
-  base_default: 0.169,
+  base_default: 0.32,
   // Diskon ukuran bertingkat, dari yang terkecil ke yang terbesar. Tier
   // tertinggi dulu saat dicocokkan (sizeDiscountFor memakai yang pertama cocok).
+  // Enam tier dari fit power-law log(mcap/TVL) ~ log(TVL), slope -0,392:
+  // titik tengah tiap bucket TVL (lihat live_size_medians).
   size_tiers: [
-    { min_tvl: 5_000_000_000, discount: 0.35 },
-    { min_tvl: 1_000_000_000, discount: 0.5 },
-    { min_tvl: 500_000_000, discount: 0.65 },
-    { min_tvl: 100_000_000, discount: 0.8 },
+    { min_tvl: 5_000_000_000, discount: 0.087 },
+    { min_tvl: 1_000_000_000, discount: 0.164 },
+    { min_tvl: 500_000_000, discount: 0.248 },
+    { min_tvl: 100_000_000, discount: 0.372 },
+    { min_tvl: 50_000_000, discount: 0.612 },
   ],
   growth_weight: 0.5,
   growth_floor: -60,
@@ -160,9 +190,22 @@ export const MODEL: ModelConstants = {
     Bridge: { n: 8, median: 0.088 },
     'Yield Aggregator': { n: 5, median: 0.05 },
   },
+  // Median rasio mcap/TVL mentah per bucket TVL (128 live-token bermcap > $0,
+  // winsorized 0,005-2,0) — benchmark ukuran di modal detail: protokol besar
+  // diperdagangkan jauh lebih murah per dolar TVL daripada yang kecil.
+  // Pola yang sama di data segar 28 Nov 2026 (0,412; 0,180; 0,133; 0,031;
+  // 0,037; 0,039).
+  live_size_medians: [
+    { min_tvl: 0, median: 0.419, n: 76 },
+    { min_tvl: 50_000_000, median: 0.171, n: 20 },
+    { min_tvl: 100_000_000, median: 0.125, n: 15 },
+    { min_tvl: 500_000_000, median: 0.034, n: 3 },
+    { min_tvl: 1_000_000_000, median: 0.029, n: 10 },
+    { min_tvl: 5_000_000_000, median: 0.044, n: 4 },
+  ],
 };
 
-export const MODEL_VERSION = 'radar-4';
+export const MODEL_VERSION = 'radar-5';
 
 /** Berapa pre-token di luar watchlist yang dibawa board, menurut implied value. */
 export const EARLY_ROWS = 160;

@@ -74,7 +74,7 @@ button { cursor: pointer; }
 .model-steps span { font-size: 14px; }
 .model-steps em { font-style: normal; color: var(--muted); font-size: 12.5px; }
 .model-steps code, .formula code { font-family: var(--font-num); color: var(--cyan); font-size: .92em; }
-.formula { margin-top: var(--s4); padding: var(--s3) var(--s4); background: var(--bg); border: 1px dashed var(--line); border-radius: var(--radius-sm); font-family: var(--font-num); font-size: 13px; color: var(--ink); overflow-x: auto; white-space: nowrap; }
+.formula { margin-top: var(--s4); padding: var(--s3) var(--s4); background: var(--bg); border: 1px dashed var(--line); border-radius: var(--radius-sm); font-family: var(--font-num); font-size: 13px; color: var(--ink); white-space: normal; overflow-wrap: break-word; }
 .calibration { margin-top: var(--s3); color: var(--muted); font-size: 12.5px; max-width: 90ch; }
 .disclaimer { margin-top: var(--s3); color: var(--faint); font-size: 12.5px; }
 

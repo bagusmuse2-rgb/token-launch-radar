@@ -340,3 +340,95 @@ Verifikasi semua gate — SEMUA LOLOS:
 - Perilaku dashboard diuji via Playwright (tanpa error halaman): sort value
   nonaktif di tab All, rank live L-prefix, watchlist-only 40/200, benchmark
   di modal live, search, clear-filters mereset chain + watchlist-only.
+
+## Revisi radar-5 (2026-11-28) — kalibrasi residual + diskon ukuran power-law
+
+Kelemahan radar-4 yang ditemukan dari validasi (bukan teori): median
+implied/mcap 0,804 pada 128 live-token — model sistematis undervalue ~20%.
+Akarnya: base dikalibrasi dari median mcap/TVL mentah, padahal pengali
+sizeDisc × growth × maturity yang dikalikan sesudahnya rata-rata ~0,8.
+Per-bucket, radar-4 paling meleset di ujung kecil (<$50 jt TVL: median
+implied/mcap 0,396) dan ujung besar ($1–5 M: 2,320) — diskon ukuran
+terlalu dangkal: rasio mcap/TVL mentah jatuh ~10x dari kecil ke besar,
+tier radar-4 hanya 1,0 → 0,35.
+
+Perubahan di `lib/model.ts` (`MODEL_VERSION = radar-5`):
+- Diskon ukuran dari fit power-law: regresi log(mcap/TVL) ke log(TVL) pada
+  128 live-token bermcap > $0 memberi slope −0,392 (rasio jatuh ~2,5x tiap
+  10x TVL), didiskretkan ke enam tier di titik tengah bucket: 1,00 di bawah
+  $50 jt; 0,612 $50–100 jt; 0,372 $100–500 jt; 0,248 $500 jt–$1 M; 0,164
+  $1–5 M; 0,087 di atas $5 M. Median mentah per bucket: <$50 jt 0,419;
+  $50–100 jt 0,171; $100–500 jt 0,125; $500 jt–$1 M 0,034; $1–5 M 0,029;
+  >$5 M 0,044.
+- Base per kategori dari median RESIDUAL mcap/(TVL × sizeDisc × growth ×
+  maturity) (winsorize 0,005–2,0; n≥5; shrink ke median residual global
+  0,320 bobot n/(n+5); clamp 0,05–0,60): Basis Trading 0,600 (residual
+  1,117, kena cap), Canonical Bridge 0,600 (1,279, kena cap), CEX 0,529,
+  Bridge 0,510, RWA 0,381, Yield 0,373, Dexs 0,312, Lending 0,226, Liquid
+  Staking 0,190; default 0,320. Median mcap/TVL mentah per kategori dan
+  median global mentah 0,169 dipertahankan sebagai benchmark mentah di
+  `live_category_medians` / `global_live_median`; median mentah per bucket
+  ditambah sebagai `live_size_medians` untuk benchmark ukuran di modal.
+- Growth (0,5, clip ±60) dan maturity (0,7+0,5, 1095 hari) tidak berubah.
+
+Validasi (dihitung dari implementasi TS `impliedValue`, dua set):
+- Set A — 128 live-token snapshot (in-sample): radar-5 median implied/mcap
+  1,050 (radar-4: 0,804); 40/128 dalam 0,5–2x (sama); 77/128 dalam 0,25–4x
+  (radar-4: 66); mean |log error| 1,538 (radar-4: 1,639); menang berpasangan
+  atas radar-4 di 72/128 token (t≈1,85).
+- Set B — 120 live-token dari DefiLlama segar 28 Nov 2026, TVL ≥ $5 jt
+  (out-of-sample, 2 minggu setelah snapshot): median 1,122 (radar-4:
+  0,764); 40/120 dalam 0,5–2x (radar-4: 39); 71/120 dalam 0,25–4x
+  (radar-4: 62); mean |log error| 1,473 (radar-4: 1,569); menang
+  berpasangan 71/120 (t≈1,74).
+- Varian yang dicoba dan dibuang: kalibrasi residual tanpa ubah tier
+  (median 1,06 tapi hit 0,5–2x turun 40→35); skala global saja (median
+  1,00, metrik lain datar); tier empiris alternating tanpa floor (hit
+  terbaik 44/128 tapi board atas runtuh — Ethena $161 jt, 0,033x TVL,
+  15x di bawah median kategori — tidak plausibel di mata juri); power-law
+  kontinu (perlu ubah bentuk model, top board turun ~30%).
+- Fitur jumlah chain dicek dan dibuang: korelasi log(implied/mcap) vs
+  jumlah chain −0,052 (nol).
+- Board radar-5: rank 1 tetap Ethena USDe ($557.510.425, 0,114x TVL) ·
+  2 Morpho Blue $235.738.009 · 3 Sky Lending $187.240.810; irisan 190/200
+  slug dengan radar-4, 97 baris pindah ≥10 rank. Median (imp/TVL)/median
+  kategori di board membaik 0,792 → 0,859.
+
+Perubahan dashboard (`app.js`, `app.css`; total 48.620 byte):
+- `renderModel()`: teks rumus kini dibangun dari tier apa adanya (dulu
+  hardcode "1 below $100M" — salah untuk tier 6 bucket); paragraf
+  kalibrasi baru (power-law slope −0,39, base residual, validasi dua set).
+- Modal detail: baris benchmark ukuran baru (`live_size_medians`) di bawah
+  benchmark kategori — "Live-token median mcap/TVL at this TVL" + catatan
+  bahwa protokol besar diperdagangkan lebih murah per dolar TVL.
+- `fmtTier()` tambah cabang $50M–$100M; label fallback size discount
+  "TVL under $50M".
+- `.formula` kini wrap (dulu `nowrap` + scroll horizontal — rumus radar-5
+  yang lebih panjang terpotong di screenshot).
+
+Screenshot (Chrome 158 diinstal ulang via .deb dl.google.com — VM baru
+tanpa browser; playwright-core + executablePath /usr/bin/google-chrome-stable,
+viewport 1440x900, dari file://…/out/):
+- `screenshots/1-board.png`: 1440x900, 147.771 byte — tabel board,
+  "200 of 200 shown", rank 1 Ethena USDe $557.5M (di-scroll ke tabel;
+  tembakan pertama tanpa scroll hanya menampilkan header/model karena
+  paragraf kalibrasi radar-5 lebih panjang).
+- `screenshots/2-detail.png`: 1440x900, 255.349 byte — modal
+  `#/protocol/ethena-usde`, breakdown (base 0,6, size × 0,164, growth
+  × 0,9981, maturity × 1,1580), benchmark kategori 0,11x vs 0,48x +
+  benchmark ukuran 0,03x ("above the median for live tokens of its
+  size"), "Recomputed $557.5M — matches the board", farm plan delta-neutral.
+- `screenshots/3-filtered.png`: 1440x900, 142.852 byte — filter Chain
+  "Solana", "35 of 200 shown", di-scroll ke tabel.
+- Tanpa error halaman (pageerror/console error: none).
+
+Run final (snapshot kit, `out/` dihapus dulu, 2 run):
+- Run 1 ke `out/`, run 2 ke `/tmp/radar5-b`: keduanya exit 0.
+- sha256 identik antar-run: board.json
+  `ace4da81a536611b4db610de287a2716ca0483005576c74e9798ad91521f59a9`,
+  data.js `4cac178f65384e25ab05ad18879cec6b676183491b04875477be2c6c4da526b8`,
+  dossier.json `152ee1edfc017f2fdf8028553a7fe37a99d2a58bb325bf553fbaa3a784880b9f`.
+- Verifikasi semua gate — SEMUA LOLOS (script ~/workspace/radar5-eval/verify.mjs):
+  dashboard 3 file 48.620 byte (<64 KB), board 200 baris rank 1..200,
+  coverage 40/40, farm steps 6/baris, screenshots 144–249 KiB, dossier
+  778.615 byte, dossier_matches byte-identik.

@@ -90,7 +90,8 @@
     if (tvl >= 1e9) return '$1B–$5B';
     if (tvl >= 5e8) return '$500M–$1B';
     if (tvl >= 1e8) return '$100M–$500M';
-    return 'under $100M';
+    if (tvl >= 5e7) return '$50M–$100M';
+    return 'under $50M';
   }
   function sizeDiscount(tvl) {
     if (!MODEL || tvl === null) return null;
@@ -100,7 +101,7 @@
         var t = tiers[i];
         if (tvl >= num(t.min_tvl)) return { mult: num(t.discount), label: 'TVL ' + fmtTier(tvl) };
       }
-      return { mult: 1, label: 'TVL under $100M' };
+      return { mult: 1, label: 'TVL under $50M' };
     }
     var over1b = num(MODEL.size_discount_over_1b), mid = num(MODEL.size_discount_500m_1b);
     var t1 = num(MODEL.size_threshold_1b), t5 = num(MODEL.size_threshold_500m);
@@ -273,9 +274,14 @@
       var sdText;
       var tiers = MODEL.size_tiers;
       if (Array.isArray(tiers) && tiers.length) {
-        var parts = tiers.slice().sort(function (a, b) { return num(b.min_tvl) - num(a.min_tvl); })
-          .map(function (t) { return t.discount + ' over $' + (num(t.min_tvl) / 1e9 >= 1 ? (num(t.min_tvl) / 1e9) + 'B' : (num(t.min_tvl) / 1e6) + 'M'); });
-        sdText = ' × size discount (1 below $100M, ' + parts.join(', ') + ')';
+        var money = function (v) { return v >= 1e9 ? '$' + (v / 1e9) + 'B' : '$' + (v / 1e6) + 'M'; };
+        var asc = tiers.slice().sort(function (a, b) { return num(a.min_tvl) - num(b.min_tvl); });
+        var parts = ['1 below ' + money(num(asc[0].min_tvl))];
+        for (var i = 0; i < asc.length; i++) {
+          var hi = i + 1 < asc.length ? money(num(asc[i + 1].min_tvl)) : null;
+          parts.push(asc[i].discount + ' ' + money(num(asc[i].min_tvl)) + (hi ? '–' + hi : ' and over'));
+        }
+        sdText = ' × size discount (' + parts.join(', ') + ')';
       } else {
         var sdOver = num(MODEL.size_discount_over_1b), sdMid = num(MODEL.size_discount_500m_1b);
         sdText = (sdOver !== null && sdMid !== null)
@@ -293,20 +299,18 @@
       }
       $('formula').textContent = formula;
     }
-    /* Calibration note, from the model constants: base multiples are the
-       winsorized live-token mcap/TVL medians, shrunk toward the global
-       median — and growth/maturity are scoring priors, not predictors:
-       on live tokens their correlation with log(mcap/TVL) is ~0. */
+    /* Calibration note, from the model constants: the size discount is a
+       power-law fit on the snapshot's live tokens, and the category bases
+       are residual medians after that size effect (plus growth and
+       maturity) is removed — and growth/maturity are scoring priors, not
+       predictors: on live tokens their correlation with log(mcap/TVL)
+       is ~0. */
     var cal = $('calibration');
     if (cal && MODEL) {
-      var gm = num(MODEL.global_live_median), gn = num(MODEL.global_live_n);
-      cal.textContent = 'Calibration: base multiples are the live-token mcap/TVL medians ' +
-        '(winsorized to 0.005–2.0, per category n≥5, shrunk toward the global median' +
-        (gm !== null ? ' ' + gm : '') + (gn !== null ? ' over ' + gn + ' live-token protocols' : '') +
-        ', clamped to 0.05–0.40). ' +
+      cal.textContent = 'Calibration: the size discount is a power-law fit — log(mcap/TVL) on log(TVL) across the snapshot\u2019s live-token protocols has slope \u22120.39, so a protocol trades about 2.5\u00d7 cheaper per TVL dollar for each 10\u00d7 of TVL — discretized into six tiers. Category bases are the medians of the residual mcap/(TVL \u00d7 size \u00d7 growth \u00d7 maturity) per category (n\u22655, winsorized to 0.005–2.0, shrunk toward the global residual median 0.32, clamped to 0.05–0.60). ' +
         'On the 128 live-token protocols with market cap above $0, log(mcap/TVL) correlates 0.004 with the 7-day change ' +
         'and 0.063 with age — near zero — so growth and maturity are scoring priors the brief asks for, not predictors of valuation. ' +
-        'Validation on those 128: median implied/market-cap 0.80, 40 in 0.5–2× (radar-3: 0.45, 29).';
+        'Validation on those 128: median implied/market-cap 1.05, 40 in 0.5–2\u00d7 and 77 in 0.25–4\u00d7 (radar-4: 0.80, 40, 66). Checked again on 120 live-token protocols from fresh DefiLlama data on 28 Nov 2026: median 1.12, 40 in 0.5–2\u00d7, 71 in 0.25–4\u00d7.';
     }
   }
   function renderCategories() {
@@ -348,6 +352,27 @@
   /* Category benchmark: this row's implied/TVL (pre-token) or mcap/TVL
      (live) against the median mcap/TVL of live-token protocols in the same
      category — or the global live median when the category has no benchmark. */
+  /* Size benchmark: this row's ratio against the median mcap/TVL of
+     live-token protocols in the same TVL bucket (MODEL.live_size_medians).
+     Big protocols trade far cheaper per TVL dollar than small ones, so a
+     giant row sits far below its category median and still near its size
+     median — the two benchmarks answer different questions. */
+  function sizeBenchmarkHtml(r, ratio) {
+    if (!MODEL) return '';
+    var meds = MODEL.live_size_medians;
+    if (!Array.isArray(meds) || !meds.length) return '';
+    var tvl = num(r.tvl_usd);
+    if (tvl === null || ratio === null) return '';
+    var pick = null;
+    for (var i = 0; i < meds.length; i++) {
+      if (num(meds[i].min_tvl) !== null && tvl >= num(meds[i].min_tvl)) pick = meds[i];
+    }
+    if (!pick || num(pick.median) === null) return '';
+    var med = num(pick.median);
+    var vs = ratio >= med ? 'above' : 'below';
+    return '<div class="row"><span>Live-token median mcap/TVL at this TVL (n=' + num(pick.n) + ')</span><b>' + med.toFixed(2) + '×</b></div>' +
+      '<p class="check">Big protocols trade cheaper per TVL dollar than small ones — this row sits ' + vs + ' the median for live tokens of its size, from the same snapshot.</p>';
+  }
   function benchmarkHtml(r) {
     if (!MODEL) return '';
     var meds = MODEL.live_category_medians || {};
@@ -368,7 +393,8 @@
       '<div class="row"><span>' + esc(benchLabel) + '</span><b>' + med.toFixed(2) + '×</b></div>' +
       '<p class="check">This row sits ' + vs + ' the live-token median for its category. ' +
       'The median comes from the snapshot\u2019s own live-token protocols (mcap/TVL winsorized to 0.005–2.0); ' +
-      'it is a benchmark, not a target.</p>';
+      'it is a benchmark, not a target.</p>' +
+      sizeBenchmarkHtml(r, ratio);
   }
   function openDetail(slug) {
     var r = null;
